@@ -1,8 +1,8 @@
+//go:build static
 // +build static
-// +build sqlite3ext
 
 package sqlite
 
-// #cgo CFLAGS: -DSQLITE_CORE -DUSE_LIBSQLITE3
+// #cgo CFLAGS: -DSQLITE_CORE
 // #cgo LDFLAGS: -lsqlite3
 import "C"
