@@ -11,8 +11,9 @@ package sqlite
 //
 import "C"
 import (
-	"github.com/mattn/go-pointer"
 	"unsafe"
+
+	"github.com/mattn/go-pointer"
 )
 
 // ExtensionFunc represents a sqlite3 extension function,
@@ -52,6 +53,12 @@ func go_sqlite3_extension_init(name *C.char, db *C.struct_sqlite3, msg **C.char)
 // sqlite's extension facility.
 type ExtensionApi struct {
 	db *C.struct_sqlite3
+}
+
+type CSqliteObjectPtr = *C.struct_sqlite3
+
+func NewExtensionApi(db CSqliteObjectPtr) *ExtensionApi {
+	return &ExtensionApi{db}
 }
 
 // Connection returns an instance of Conn which can be used to perform query on the database and more.
