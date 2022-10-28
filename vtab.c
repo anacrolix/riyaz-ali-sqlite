@@ -45,7 +45,8 @@ int x_rowid(sqlite3_vtab_cursor *base_cursor, sqlite_int64 *pRowid) {
   if (!cursor->isArray) {
     return x_rowid_tramp(base_cursor, pRowid);
   }
-  return cursor->array.rowid;
+  *pRowid = cursor->array.rowid;
+  return SQLITE_OK;
 }
 
 int x_close(sqlite3_vtab_cursor *base_cursor) {
