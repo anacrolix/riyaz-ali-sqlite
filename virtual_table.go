@@ -1,84 +1,20 @@
 package sqlite
 
-// #include <stdlib.h>
-// #include <string.h>
-// #include "sqlite3.h"
-// #include "bridge/bridge.h"
-//
-// extern int x_create_tramp(sqlite3*, void*, int, char**, sqlite3_vtab**, char**);
-// extern int x_connect_tramp(sqlite3*, void*, int, char**, sqlite3_vtab**, char**);
-// extern int x_best_index_tramp(sqlite3_vtab*, sqlite3_index_info*);
-// extern int x_disconnect_tramp(sqlite3_vtab*);
-// extern int x_destroy_tramp(sqlite3_vtab*);
-// extern int x_open_tramp(sqlite3_vtab*, sqlite3_vtab_cursor**);
-// extern int x_close_tramp(sqlite3_vtab_cursor*);
-// extern int x_filter_tramp(sqlite3_vtab_cursor*, int, char*, int, sqlite3_value**);
-// extern int x_next_tramp(sqlite3_vtab_cursor*);
-// extern int x_eof_tramp(sqlite3_vtab_cursor*);
-// extern int x_column_tramp(sqlite3_vtab_cursor*, sqlite3_context*, int);
-// extern int x_rowid_tramp(sqlite3_vtab_cursor*, sqlite3_int64*);
-// extern int x_update_tramp(sqlite3_vtab*, int, sqlite3_value**, sqlite3_int64*);
-// extern int x_begin_tramp(sqlite3_vtab*);
-// extern int x_sync_tramp(sqlite3_vtab*);
-// extern int x_commit_tramp(sqlite3_vtab*);
-// extern int x_rollback_tramp(sqlite3_vtab*);
-//
-// typedef void (*overloaded_function)(sqlite3_context*,int,sqlite3_value**);
-// extern int x_find_function_tramp(sqlite3_vtab*, int, char*, overloaded_function*, void**);
-// extern void x_overloaded_function_tramp(sqlite3_context*, int, sqlite3_value**);
-//
-// extern void module_destroy(void*);
-//
-// static sqlite3_module* _allocate_sqlite3_module() {
-//   sqlite3_module* module = (sqlite3_module*) _sqlite3_malloc(sizeof(sqlite3_module));
-//   memset(module, 0, sizeof(sqlite3_module));
-//   return module;
-// }
-//
-// typedef struct go_virtual_table go_virtual_table;
-// struct go_virtual_table {
-//   sqlite3_vtab base;  // base class - must be first
-//   void *impl;  // pointer to go virtual table implementation
-// };
-//
-// static int _allocate_virtual_table(sqlite3_vtab **out, void *impl){
-//   go_virtual_table* table = (go_virtual_table*) _sqlite3_malloc(sizeof(go_virtual_table));
-//   if (!table) {
-//     return SQLITE_NOMEM;
-//   }
-//   memset(table, 0, sizeof(go_virtual_table));
-//	 table->impl = impl;
-//   *out = (sqlite3_vtab*) table;
-//   return SQLITE_OK;
-// }
-//
-// typedef struct go_virtual_cursor go_virtual_cursor;
-// struct go_virtual_cursor {
-//   sqlite3_vtab_cursor base;  // base class - must be first
-//   void *impl;  // pointer to go virtual cursor implementation
-// };
-//
-// static int _allocate_virtual_cursor(sqlite3_vtab_cursor **out, void *impl){
-//   go_virtual_cursor* cursor = (go_virtual_cursor*) _sqlite3_malloc(sizeof(go_virtual_cursor));
-//   if (!cursor) {
-//     return SQLITE_NOMEM;
-//   }
-//   memset(cursor, 0, sizeof(go_virtual_cursor));
-//	 cursor->impl = impl;
-//   *out = (sqlite3_vtab_cursor*) cursor;
-//   return SQLITE_OK;
-// }
-//
 import "C"
-
 import (
 	"bytes"
 	"errors"
-	"github.com/mattn/go-pointer"
 	"reflect"
 	"strings"
 	"unsafe"
+
+	"github.com/mattn/go-pointer"
 )
+
+/*
+#include "vtab.h"
+*/
+import "C"
 
 // VirtualTableContext is an extension of sqlite.Context that allows us to access some specialised interfaces only
 // available when dealing with virtual tables.
@@ -117,18 +53,12 @@ type StatefulModule interface {
 }
 
 // VirtualTable corresponds to an sqlite3_vtab and defines a virtual table object used to implement a virtual table.
-// By default implementations of this interface are considered read-only. Implement WriteableVirtualTable and use
+// By default, implementations of this interface are considered read-only. Implement WriteableVirtualTable and use
 // ReadOnly(false) option to enable read-write support.
 type VirtualTable interface {
 	// BestIndex is used to determine whether an index is available and can be used to optimise query for the table.
 	// SQLite uses the BestIndex method of a virtual table module to determine the best way to access the virtual table.
 	BestIndex(*IndexInfoInput) (*IndexInfoOutput, error)
-
-	// Open creates a new cursor used for accessing (read and/or writing) a virtual table.
-	// When initially opened, the cursor is in an undefined state. The SQLite core will invoke the
-	// Filter method on the cursor prior to any attempt to position or read from the cursor.
-	// A virtual table implementation must be able to support an arbitrary number of simultaneously open cursors.
-	Open() (VirtualCursor, error)
 
 	// Disconnect releases a connection to a virtual table.
 	// Only the virtual table connection is destroyed.
@@ -138,6 +68,19 @@ type VirtualTable interface {
 	// Destroy releases a connection to a virtual table, just like the Disconnect method,
 	// and it also destroys the underlying table implementation.
 	Destroy() error
+}
+
+type GoCursorVirtualTable interface {
+	// Open creates a new cursor used for accessing (read and/or writing) a virtual table.
+	// When initially opened, the cursor is in an undefined state. The SQLite core will invoke the
+	// Filter method on the cursor prior to any attempt to position or read from the cursor.
+	// A virtual table implementation must be able to support an arbitrary number of simultaneously open cursors.
+	Open() (VirtualCursor, error)
+}
+
+type CArrayCursorVirtualTable interface {
+	OpenArray() (VirtualArrayCursor, error)
+	NumCols() int
 }
 
 // WriteableVirtualTable is one that supports INSERT, UPDATE and/or DELETE operations.
@@ -253,10 +196,34 @@ type VirtualCursor interface {
 	Close() error
 }
 
+type VirtualArrayCursor interface {
+	FilterToArray(int, string, ...Value) ([]Row, error)
+}
+
+type Row []ResultValue
+
+type ResultValue any
+
+func TextResult(text string) (ret ResultValue) {
+	return text
+}
+
+func Int64Result(i int64) (ret ResultValue) {
+	return i
+}
+
+func NullResult() (ret ResultValue) {
+	return nil
+}
+
+func ValueResult(value Value) ResultValue {
+	return value
+}
+
 // ConstraintOp op-code passed as input in BestIndex
 type ConstraintOp C.int
 
-//noinspection GoSnakeCaseUsage
+// noinspection GoSnakeCaseUsage
 const (
 	INDEX_CONSTRAINT_EQ        = ConstraintOp(C.SQLITE_INDEX_CONSTRAINT_EQ)
 	INDEX_CONSTRAINT_GT        = ConstraintOp(C.SQLITE_INDEX_CONSTRAINT_GT)
@@ -278,7 +245,7 @@ const (
 // ScanFlags masking bits used by virtual table implementations to set the IndexInfoOutput.IdxFlags field
 type ScanFlag int
 
-//noinspection GoSnakeCaseUsage
+// noinspection GoSnakeCaseUsage
 const (
 	INDEX_SCAN_UNIQUE = ScanFlag(C.SQLITE_INDEX_SCAN_UNIQUE) // scan visits at most 1 row
 )
@@ -405,11 +372,11 @@ func (ext *ExtensionApi) CreateModule(name string, module Module, opts ...func(*
 	}
 
 	xFilter = (*[0]byte)(C.x_filter_tramp)
-	xNext = (*[0]byte)(C.x_next_tramp)
-	xRowid = (*[0]byte)(C.x_rowid_tramp)
-	xColumn = (*[0]byte)(C.x_column_tramp)
-	xEof = (*[0]byte)(C.x_eof_tramp)
-	xClose = (*[0]byte)(C.x_close_tramp)
+	xNext = (*[0]byte)(C.x_next)
+	xRowid = (*[0]byte)(C.x_rowid)
+	xColumn = (*[0]byte)(C.x_column)
+	xEof = (*[0]byte)(C.x_eof)
+	xClose = (*[0]byte)(C.x_close)
 
 	var sqliteModule = C._allocate_sqlite3_module()
 	sqliteModule.iVersion = 0
@@ -633,20 +600,49 @@ func x_destroy_tramp(tab *C.sqlite3_vtab) C.int {
 	return C.int(SQLITE_OK)
 }
 
+func openCursor(table any, typedCur *C.go_virtual_cursor) error {
+	switch opener := table.(type) {
+	case CArrayCursorVirtualTable:
+		cursor, err := opener.OpenArray()
+		if err != nil {
+			return err
+		}
+		typedCur.isArray = true
+		typedCur.array.numCols = C.int(opener.NumCols())
+		typedCur.impl = pointer.Save(cursor)
+		return nil
+	case GoCursorVirtualTable:
+		goCursor, err := opener.Open()
+		if err != nil {
+			return err
+		}
+		typedCur.impl = pointer.Save(goCursor)
+		return nil
+	default:
+		return errors.New("virtual table does not implement supported open")
+	}
+}
+
 //export x_open_tramp
 func x_open_tramp(tab *C.sqlite3_vtab, cur **C.sqlite3_vtab_cursor) C.int {
-	var err error
-
-	var table = pointer.Restore(((*C.go_virtual_table)(unsafe.Pointer(tab))).impl).(VirtualTable)
-	var cursor VirtualCursor
-	if cursor, err = table.Open(); err != nil {
+	table := pointer.Restore(((*C.go_virtual_table)(unsafe.Pointer(tab))).impl).(VirtualTable)
+	code := C._allocate_virtual_cursor(cur)
+	var typedCur *C.go_virtual_cursor = (*C.go_virtual_cursor)(unsafe.Pointer(*cur))
+	if code != C.SQLITE_OK {
+		return code
+	}
+	errorCodeOrSetMessage := func(err error) C.int {
 		if ec, ok := err.(ErrorCode); ok {
 			return C.int(ec)
 		}
 		return set_error_message(tab, err)
 	}
-
-	return C._allocate_virtual_cursor(cur, pointer.Save(cursor))
+	err := openCursor(table, typedCur)
+	if err != nil {
+		C._sqlite3_free(unsafe.Pointer(*cur))
+		return errorCodeOrSetMessage(err)
+	}
+	return C.SQLITE_OK
 }
 
 //export x_update_tramp
@@ -710,11 +706,31 @@ func x_close_tramp(cur *C.sqlite3_vtab_cursor) C.int {
 	return C.int(SQLITE_OK)
 }
 
+func marshalArrayFilterData(rows []Row, numCols int, data *C.ArrayCursorData) {
+	// TODO: Only realloc larger.
+	data.columns = (*C.ArrayCursorColumn)(unsafe.Pointer(
+		C._sqlite3_realloc(
+			unsafe.Pointer(data.columns),
+			C.int(len(rows)*numCols))))
+	data.numRows = C.int(len(rows))
+}
+
 //export x_filter_tramp
 func x_filter_tramp(cur *C.sqlite3_vtab_cursor, idxNum C.int, idxStr *C.char, argc C.int, valarray **C.sqlite3_value) C.int {
-	var cursor = pointer.Restore(((*C.go_virtual_cursor)(unsafe.Pointer(cur))).impl).(VirtualCursor)
-	var str = C.GoString(idxStr)
-	if err := cursor.Filter(int(idxNum), str, toValues(argc, valarray)...); err != nil {
+	cgoCursor := (*C.go_virtual_cursor)(unsafe.Pointer(cur))
+	cursorImplAny := pointer.Restore(cgoCursor.impl)
+	goIdxStr := C.GoString(idxStr)
+	var err error
+	if cgoCursor.isArray {
+		var values []Row
+		values, err = cursorImplAny.(VirtualArrayCursor).FilterToArray(int(idxNum), goIdxStr, toValues(argc, valarray)...)
+		marshalArrayFilterData(values, int(cgoCursor.array.numCols), &cgoCursor.array.data)
+		cgoCursor.array.rowid = 1
+		cgoCursor.array.rowIndex = 0
+	} else {
+		err = cursorImplAny.(VirtualCursor).Filter(int(idxNum), goIdxStr, toValues(argc, valarray)...)
+	}
+	if err != nil {
 		if ec, ok := err.(ErrorCode); ok {
 			return C.int(ec)
 		}
@@ -724,13 +740,13 @@ func x_filter_tramp(cur *C.sqlite3_vtab_cursor, idxNum C.int, idxStr *C.char, ar
 }
 
 //export x_next_tramp
-func x_next_tramp(cur *C.sqlite3_vtab_cursor) C.int {
-	var cursor = pointer.Restore(((*C.go_virtual_cursor)(unsafe.Pointer(cur))).impl).(VirtualCursor)
+func x_next_tramp(cur *C.go_virtual_cursor) C.int {
+	var cursor = pointer.Restore(cur.impl).(VirtualCursor)
 	if err := cursor.Next(); err != nil {
 		if ec, ok := err.(ErrorCode); ok {
 			return C.int(ec)
 		}
-		return set_error_message(cur.pVtab, err)
+		return set_error_message(cur.base.pVtab, err)
 	}
 	return C.int(SQLITE_OK)
 }
