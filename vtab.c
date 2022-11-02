@@ -1,6 +1,7 @@
-#include <sqlite3ext.h>
 #include <stdio.h>
 #include "vtab.h"
+
+SQLITE_EXTENSION_INIT3
 
 int x_next(sqlite3_vtab_cursor *base_cursor) {
 //	printf("hello from x_next\n");
